@@ -1,0 +1,165 @@
+{-
+    Owner: github/rxf0
+
+    Description of Algorithm:
+		Synchronizes searcher, inserter, and deleter processes to the guidelines laid out in
+		the assignment document. Uses conditional checking of states, mutex, and nonbinary
+		semaphores to manage concurrent processing in the prescribed manner. Searchers does
+		run concurrently with other searchers and/or one instance of insert and have the
+		highest priority of all items. Insert has second highest priority and does run
+		concurrently with searchers. Delete has the lowest priority and does not run
+		concurrently with search or insert.
+
+ 	Assumptions:
+		1)	Assuming that for starvation, if any new inserters were added during the clearing
+			of the deletion phase the algorithm would not jump back to continue clearing out
+			that area as that could cause a loop (dependent on the input sequence) in which
+			you may never return to letting searchers run.
+
+		2)	I am assuming that sBlocked will only occur after 10 searches have 
+			finished, as the assignment document states "After 10 consecutive 
+			searchers search the list L". Simple change to consider is just to check
+			sFinishedCnt + sPassingCnt >=10 instead of sFinishedCnt >=10 
+
+		3)	C-like conditional checking
+
+
+	Function Declarations:
+		SEARCH-AND-LOG-RESULTS(L, item) takes a list L, searches for item in L, and logs the results
+		upon the start of the search and end of the search.
+
+		INSERT-AND-LOG-RESULTS(L, item) takes a list L, searches for item in L, if not found, adds to L
+		and logs the results upon the start of the insertion and end of the insertion with the processes PID,
+		process type, recording time of insertion, and success state.
+
+		DELETE-AND-LOG-RESULTS(L, item) takes a list L, searches for item in L, if found, deletes item
+		from L and logs the results upon the start of the delete call and end of the delete routine with
+		the processes PID, process type, recording time of insertion, and success state.
+
+	Comments:
+		I apologize for the lack of small comments in the process definitions below! Some of the conditions
+		could have been written better, but I continued to add conditions as I ran through different input
+		test cases.
+-}
+
+mutex := 1; 
+
+{-	Nonbinary Semaphores; for determining whose turn it is	-}
+sWait := 0; iWait := 0; dWait := 0;
+
+{-
+	Integers for defining counts for searchers passing through a list, finished searchers, 
+	waiting searchers, waiting inserters, and waiting deleters (respectively)	
+-}
+int sPassingCnt := 0; sFinishedCnt := 0; sWaitCnt := 0; iWaitCnt := 0; dWaitCnt := 0;
+
+{-
+	Booleans for defining searcher blocked state. Also the state for whether any processes are 
+	currently searching, inserting, or deleting (respectively).
+-}
+bool sBlocked := false; searching := false; inserting := false; deleting := false;
+		 
+
+process Searcher(L, item) {
+	wait(mutex);
+		if (sBlocked || deleting) {
+			sWaitCnt++;
+			signal(mutex);
+			wait(sWait);
+			sWaitCnt--;
+		}
+		sPassingCnt++;
+		searching := true;
+	signal(mutex);
+
+	SEARCH-AND-LOG-RESULTS(L, item);
+
+	wait(mutex);
+		sFinishedCnt++;
+		sPassingCnt--;
+		if (sPassingCnt == 0) {
+			searching := false;
+
+			if (dWaitCnt > 0 && iWaitCnt == 0 && !inserting && !sBlocked) {
+				signal(dWait);
+			}
+		}
+
+		if (!sBlocked && (sFinishedCnt >= 10) && (iWaitCnt > 0 || dWaitCnt > 0)) {	
+			sBlocked := true;
+		} 
+		signal(mutex);
+	
+}
+
+process Insert(L, item) {
+	wait(mutex);
+		if (iWaitCnt > 0 || inserting || deleting) { //queue
+			iWaitCnt++;
+			signal(mutex);
+			wait(iWait);
+			iWaitCnt--;
+		}
+		inserting := true;
+	signal(mutex);	
+
+	INSERT-AND-LOG-RESULTS(L,ITEM);
+
+	wait(mutex);
+		inserting := false;
+
+		if (sBlocked) {
+			if (iWaitCnt == 0 && dWaitCnt == 0 && !deleting) {
+				sBlocked := false;
+				sFinishedCnt := 0;
+				signal(sWait);
+			} else if (iWaitCnt > 0 && !deleting) {
+				signal(iWait);
+			} else if (iWaitCnt == 0 && dWaitCnt > 0 && !deleting) {
+				signal(dWait);
+			} else {
+				signal(mutex);
+			}
+		} else if (!searching && sWaitCnt == 0 && !inserting && iWaitCnt == 0 && !deleting && dWaitCnt > 0) {
+			signal(dWait);
+		} else if (iWaitCnt > 0) {
+			signal(iWait);
+		} else {
+			signal(mutex);
+		}
+}
+
+process Delete(L, item) {
+	wait(mutex);
+		if (dWaitCnt > 0 || deleting || inserting || searching) {
+			dWaitCnt++;
+			signal(mutex);
+			wait(dWait);
+			dWaitCnt--;
+		}
+		deleting := true;
+	signal(mutex);
+
+	DELETE-AND-LOG-RESULTS(L,ITEM);
+
+	wait(mutex);
+		deleting := false;
+
+		if (sBlocked) {
+			if (dWaitCnt == 0) {
+				sBlocked := false;
+				sFinishedCnt := 0;
+				signal(sWait);
+			} else if (dWaitCnt > 0) {
+				signal(dWait);
+			}
+		} else if (dWaitCnt > 0 && iWaitCnt == 0 && sWaitCnt == 0) {
+			signal (dWait);
+		} else if (iWaitCnt > 0 || sWaitCnt > 0) {
+			signal(iWait);
+			signal(sWait);
+		} 
+		else {
+			signal(mutex);
+		}
+}
