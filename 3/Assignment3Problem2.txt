@@ -1,0 +1,71 @@
+{-
+	Name: github/rxf0
+
+	Description of Algorithm:
+		Each process is dealt a hand and given a player number. Then, while nobody has won,
+		each player takes a turn following the behavior stated in the assignment document
+		until a player has a winning hand. Then game ends with each player finishing their turn
+		but no action occuring as a player has already won.
+
+ 	Assumptions:
+		1)	C-like conditional checking
+		2)	Assume players are added in order (p0 then p1 then p2 then p3 via Player(i))
+
+	Function Declarations:
+		getDealt(int i) takes an integer i representing a player and returns an 
+			int[4] array consisting of player i's randomly dealt cards
+
+		getPiles() returns an int[4][3] (4 piles, upto 3 cards each) array 
+			equal to an array consisting of the four dealt piles on the table 
+
+		isFourOfAKind(int[4] cards) takes an int[4] array consisting of 4 cards and returns 
+			true if all of the cards in array cards are of the same kind
+
+		discard(int playerNo, int pile[4][3], int cards[4]) takes playerNo, the piles 
+			on the board, and the cards in a hand. It discards a card from cards[] to the pile
+			to the right of playerNo (playerNo).
+
+		discard(int playerNo, int pile[4][3], int cards[4]) takes playerNo, the piles 
+			on the board, and the cards in a hand. It draws a card from the pile to the left of
+			playerNo ((playerNo+1)%4) and adds it to cards[].
+
+	Signaling/signaled process policy: 
+		Signaling process continues to execute; and, signaled process is blocked until signaling
+		process is blocked or leaves the monitor.
+
+	Comments: Doesn't need signals or waits, as queue of monitor will keep in sync
+
+-}
+type CardPlayers=monitor;
+var playerTurn[4]:array[4] of condition; playerCount:int; GameWon:boolean; pile:array[4][3] of int
+procedure entry play() {
+	if (!GameWon) {
+		if (isFourOfAKind(myCards)) {
+			GameWon := true;
+		} else {
+			discard(i, pile, myCards);
+			pickup(i, pile, myCards);
+			if (isFourOfAKind(myCards)) {
+				GameWon := true;
+			}
+		}
+	}
+}
+
+begin
+
+	int playerCount := 0;			{-  For defining player id upon start of process  -}
+	boolean GameWon := false;		{-  Keep track of game state  -}
+	int pile[4][3] := getPiles();	{-  Contain information regarding the piles of cards on table  -}
+	Monitor Use: var MyCardPlayers:CardPlayers;
+
+	Player(i): {
+		i = playerCount; playerCount++;
+		int myCards[4] := getDealt(i);
+
+		do {
+			MyCardPlayers.play();
+		} while (!GameWon);
+	}
+
+end

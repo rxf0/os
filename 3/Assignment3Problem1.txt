@@ -1,0 +1,199 @@
+{-
+	Owner: github/rxf0
+
+	Description of Algorithm:
+		Synchronizes searcher, inserter, and deleter processes to the guidelines laid out in
+		the assignment document. Uses conditional checking of states, and monitor synchronization
+		to manage concurrent processing in the prescribed manner. Searchers does run concurrently
+		with other searchers and/or one instance of insert and have the highest priority of all
+		items. Insert has second highest priority and does run concurrently with searchers. Delete
+		has the lowest priority and does not run concurrently with search or insert. Use of mutexes
+		has been changed from Assignment 2 as monitor keeps queue of incoming calls and does not
+		need to signal and wait for each beginning/ending search/insert/delete as the queue will
+		keep them executing until nothing is left.
+
+ 	Assumptions:
+		1)	C-like conditional checking
+
+	Function Declarations:
+		SEARCH-AND-LOG-RESULTS(L, item) takes a list L, searches for item in L, and logs the results
+		upon the start of the search and end of the search.
+
+		INSERT-AND-LOG-RESULTS(L, item) takes a list L, searches for item in L, if not found, adds to L
+		and logs the results upon the start of the insertion and end of the insertion with the processes PID,
+		process type, recording time of insertion, and success state.
+
+		DELETE-AND-LOG-RESULTS(L, item) takes a list L, searches for item in L, if found, deletes item
+		from L and logs the results upon the start of the delete call and end of the delete routine with
+		the processes PID, process type, recording time of insertion, and success state.
+
+	Signaling/signaled process policy: 
+		Signaling process continues to execute; and, signaled process is blocked until signaling
+		process is blocked or leaves the monitor.
+
+	Comments:
+		Credit to G. Ozsoyoglu Assignment 2 Solutions in assisting with clearing up concerns/assumptions/issues
+		encountered on Assignment 2 to correct for Assignment 3.
+-}
+
+type SearchInsertDelete=monitor
+
+var sPassingCnt:int; sPassedCnt:int; sWaitCnt:int; iWaitCnt:int; dWaitCnt:int; iBlockedCnt:int; dBlockedCnt:int;
+var sBlocked:Boolean; inserting:Boolean; deleting:Boolean; siEmptying:Boolean;
+var sWait:Condition; iWait:Condition; dWait:Condition;
+
+procedure entry SearcherEnter() {
+	sWaitCnt++;
+
+	if (deleting) { 	-- wait for deleter
+		sWait.wait;
+		sPassingCnt++;
+	} else if ((sPassingCnt+sPassedCnt) < 10) {		-- keep searching
+		sPassingCnt++;
+		sWait.signal; -- signal for case blocked
+	} else if (((sPassingCnt + sPassedCnt) >= 10) && iWaitCnt == 0 && dWaitCnt == 0) {		-- keep searching
+		sPassedCnt = 0;
+		sPassingCnt++;
+		sWait.signal; -- signal for case blocked
+	} else {	-- enter starvation
+		if (inserting || sPassingCnt > 0) {	
+			siEmptying = true;
+		}
+
+		if (siEmptying) { 	-- let processes finish
+			sWait.wait;
+		}
+
+		sBlocked = true;
+		sPassedCnt = 0;
+		iBlockedCnt = iWaitCnt;
+		dBlockedCnt = dWaitCnt;
+
+		iWaitCnt = 0;
+		dWaitCnt = 0;
+
+		if (iBlockedCnt != 0) {	-- start clearing starved services in priority order
+			iWait.signal;
+		} else {
+			dWait.signal;
+		}
+
+		sWait.wait; -- blocked for starvation
+		sPassingCnt++;
+	}
+
+	sWaitCnt--;
+	
+}
+
+procedure entry SearcherExit() {
+	sPassingCnt--;
+	sPassedCnt++;
+	if (siEmptying) {
+		if (sPassingCnt == 0 && !inserting) { -- si no longer busy
+			siEmptying = false;
+		}
+	} else {	
+		if (sPassingCnt == 0 && sWaitCnt == 0 && !inserting && iWaitCnt == 0 && dWaitCnt > 0) {
+			dWait.signal;
+		}
+	}
+}
+
+procedure entry InserterEnter() {
+	iWaitCnt++;
+	if (sBlocked || deleting || inserting) {
+		iWait.wait;
+	}
+		inserting = true;
+}
+
+procedure entry InserterExit() {
+	if (siEmptying) {	-- insert is emptied
+		inserting = false;
+		if (sPassingCnt == 0) {	-- search emptied as well, close.
+			siEmptying = false;
+		}
+	} else {
+		if (sBlocked) {
+			iBlockedCnt--;
+			if (iBlockedCnt > 0) { --clear insert
+				iWait.signal;	
+			} else if (dBlockedCnt > 0) { --move to clear delete
+				dWait.signal;	
+			} else {	-- start fresh
+				sBlocked = false;
+				sWait.signal;
+				if (iWaitCnt > 0) {
+					iWait.signal;
+					iWaitCnt--;
+				}
+			}
+		} else {
+			inserting = false;
+			iWaitCnt--;
+			if (sPassingCnt == 0 && sWaitCnt == 0 && iWaitCnt == 0 && dWaitCnt > 0) { -- move to delete based on priority
+				dWait.signal;
+			} else {
+				iWait.signal -- catch other inserts that may have joined during starvation
+			}
+		}
+	}
+}
+
+procedure entry DeleterEnter() {
+	if (sBlocked || sWaitCnt > 0 || sPassingCnt > 0 || iWaitCnt > 0) { -- other in progress, wait because low priority
+		dWaitCnt++;
+		dWait.wait;
+	} 
+		deleting = true;
+}
+
+procedure entry DeleterExit() {
+	if (sBlocked) {
+		dBlockedCnt--;
+		if (dBlockedCnt > 0) { -- keep clearing delete
+			dWait.signal;
+		} else {	-- start fresh
+			sBlocked = false;
+			sWait.signal;
+		}
+	} else { -- delete finish, start other in priority order if available
+		deleting = false;
+		if (sWaitCnt > 0 || iWaitCnt > 0) {
+			sWait.signal;
+			iWait.signal;
+		} else if (sWaitCnt == 0 && iWaitCnt == 0 && dWaitCnt > 0) {
+			dWait.signal;
+		}
+}
+}
+
+begin sPassingCnt := sPassedCnt := sWaitCnt := iWaitCnt := dWaitCnt := iBlockedCnt := dBlockedCnt := 0;
+end
+
+begin {
+	Monitor Use: var MySearchInsertDelete:SearchInsertDelete
+
+	Searcher: {
+		MySearchInsertDelete.SearcherEnter();
+		SEARCH-AND-LOG-RESULTS(L, ITEM);
+		MySearchInsertDelete.SearcherExit();
+	}
+
+	Inserter: {
+		MySearchInsertDelete.InserterEnter();
+		INSERT-AND-LOG-RESULTS(L, ITEM);
+		MySearchInsertDelete.InserterExit();
+	}
+
+	Deleter: {
+		MySearchInsertDelete.DeleterEnter();
+		DELETE-AND-LOG-RESULTS(L, ITEM);
+		MySearchInsertDelete.DeleterExit();
+	}
+}
+{-
+	Signaling/signaled process policy: Signaling process continues to execute; and, signaled process is blocked until
+	signaling process is blocked or leaves the monitor.
+-}
